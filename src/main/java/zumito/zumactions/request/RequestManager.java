@@ -59,17 +59,17 @@ public final class RequestManager {
 
 		EmoteDefinition emote = EmoteRegistry.get(emoteId);
 		if (emote == null) {
-			sender.sendSystemMessage(Component.literal("El emote '" + emoteId + "' no existe."));
+			sender.sendSystemMessage(Component.translatable("zumactions.error.unknown_emote", emoteId));
 			return;
 		}
 
 		if (senderId.equals(targetId)) {
 			if (emote.participants() != EmoteParticipants.SOLO) {
-				sender.sendSystemMessage(Component.literal("'" + emote.label() + "' no es una acción en solitario."));
+				sender.sendSystemMessage(Component.translatable("zumactions.error.not_solo", emote.label()));
 				return;
 			}
 			if (SessionManager.isBusy(senderId)) {
-				sender.sendSystemMessage(Component.literal("Ya tienes una animación en curso. Usa /zumactions stop primero."));
+				sender.sendSystemMessage(Component.translatable("zumactions.error.you_are_busy"));
 				return;
 			}
 			SessionManager.start(List.of(sender), emote);
@@ -77,38 +77,38 @@ public final class RequestManager {
 		}
 
 		if (emote.participants() != EmoteParticipants.DUO) {
-			sender.sendSystemMessage(Component.literal("'" + emote.label() + "' no es una acción en solitario. Pruébala con tu propio nombre: /zumactions "
-					+ sender.getGameProfile().getName() + " " + emote.id()));
+			sender.sendSystemMessage(Component.translatable(
+					"zumactions.error.not_duo", emote.label(), sender.getGameProfile().getName(), emote.id()));
 			return;
 		}
 
 		if (SessionManager.isBusy(senderId)) {
-			sender.sendSystemMessage(Component.literal("Ya tienes una animación en curso. Usa /zumactions stop primero."));
+			sender.sendSystemMessage(Component.translatable("zumactions.error.you_are_busy"));
 			return;
 		}
 
 		if (BlockListData.get(server).isBlocked(targetId, senderId)) {
-			sender.sendSystemMessage(Component.literal("No podés enviarle una solicitud a ese jugador."));
+			sender.sendSystemMessage(Component.translatable("zumactions.error.blocked"));
 			return;
 		}
 
 		long currentTick = server.getTickCount();
 		Long lastRequest = lastRequestTick.get(senderId);
 		if (lastRequest != null && currentTick - lastRequest < GLOBAL_COOLDOWN_TICKS) {
-			sender.sendSystemMessage(Component.literal("Esperá un momento antes de mandar otra solicitud."));
+			sender.sendSystemMessage(Component.translatable("zumactions.error.global_cooldown"));
 			return;
 		}
 
 		Long pairCooldown = pairCooldownUntilTick.get(new PairKey(senderId, targetId));
 		if (pairCooldown != null && pairCooldown > currentTick) {
-			sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " no está aceptando solicitudes tuyas por ahora, esperá un poco."));
+			sender.sendSystemMessage(Component.translatable("zumactions.error.pair_cooldown", target.getGameProfile().getName()));
 			return;
 		}
 
 		Map<UUID, PendingRequest> targetIncoming = incomingByTarget.get(targetId);
 		boolean alreadyPendingFromSender = targetIncoming != null && targetIncoming.containsKey(senderId);
 		if (!alreadyPendingFromSender && targetIncoming != null && targetIncoming.size() >= MAX_INCOMING_REQUESTS) {
-			sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " ya tiene el máximo de solicitudes pendientes."));
+			sender.sendSystemMessage(Component.translatable("zumactions.error.target_full", target.getGameProfile().getName()));
 			return;
 		}
 
@@ -117,7 +117,8 @@ public final class RequestManager {
 			if (removeIncoming(previousTarget, senderId) != null) {
 				ServerPlayer previousTargetPlayer = server.getPlayerList().getPlayer(previousTarget);
 				if (previousTargetPlayer != null) {
-					previousTargetPlayer.sendSystemMessage(Component.literal(sender.getGameProfile().getName() + " canceló su solicitud anterior."));
+					previousTargetPlayer.sendSystemMessage(
+							Component.translatable("zumactions.info.previous_request_cancelled", sender.getGameProfile().getName()));
 					sendIncomingSnapshot(previousTargetPlayer);
 				}
 			}
@@ -129,9 +130,8 @@ public final class RequestManager {
 		lastRequestTick.put(senderId, currentTick);
 		sendIncomingSnapshot(target);
 
-		sender.sendSystemMessage(Component.literal("Solicitud enviada a " + target.getGameProfile().getName() + ". animation idle"));
-
-		target.sendSystemMessage(Component.literal(sender.getGameProfile().getName() + " te invitó a: " + emote.label() + "."));
+		sender.sendSystemMessage(Component.translatable("zumactions.info.request_sent", target.getGameProfile().getName()));
+		target.sendSystemMessage(Component.translatable("zumactions.info.invited", sender.getGameProfile().getName(), emote.label()));
 	}
 
 	// Sin especificar emisor: solo funciona si hay una única solicitud entrante (el caso
@@ -146,25 +146,25 @@ public final class RequestManager {
 	public static void accept(ServerPlayer target, ServerPlayer sender) {
 		PendingRequest request = getIncoming(target.getUUID(), sender.getUUID());
 		if (request == null) {
-			target.sendSystemMessage(Component.literal("No tenés una solicitud pendiente de " + sender.getGameProfile().getName() + "."));
+			target.sendSystemMessage(Component.translatable("zumactions.error.no_request_from", sender.getGameProfile().getName()));
 			return;
 		}
 
 		if (sender.level() != target.level() || sender.distanceTo(target) > MAX_DISTANCE) {
 			clearRequest(request);
 			sendIncomingSnapshot(target);
-			Component tooFar = Component.literal("Están muy lejos para hacer esto.");
+			Component tooFar = Component.translatable("zumactions.error.too_far");
 			sender.sendSystemMessage(tooFar);
 			target.sendSystemMessage(tooFar);
 			return;
 		}
 
 		if (SessionManager.isBusy(sender.getUUID())) {
-			target.sendSystemMessage(Component.literal(sender.getGameProfile().getName() + " ya tiene una animación en curso, espera a que termine."));
+			target.sendSystemMessage(Component.translatable("zumactions.error.sender_busy", sender.getGameProfile().getName()));
 			return;
 		}
 		if (SessionManager.isBusy(target.getUUID())) {
-			target.sendSystemMessage(Component.literal("Ya tienes una animación en curso. Usa /zumactions stop primero."));
+			target.sendSystemMessage(Component.translatable("zumactions.error.you_are_busy"));
 			return;
 		}
 
@@ -184,21 +184,21 @@ public final class RequestManager {
 	public static void reject(ServerPlayer target, ServerPlayer sender) {
 		PendingRequest request = getIncoming(target.getUUID(), sender.getUUID());
 		if (request == null) {
-			target.sendSystemMessage(Component.literal("No tenés una solicitud pendiente de " + sender.getGameProfile().getName() + "."));
+			target.sendSystemMessage(Component.translatable("zumactions.error.no_request_from", sender.getGameProfile().getName()));
 			return;
 		}
 
 		clearRequest(request);
 		sendIncomingSnapshot(target);
 		startPairCooldown(target.getServer(), request);
-		target.sendSystemMessage(Component.literal("Rechazaste la solicitud de " + sender.getGameProfile().getName() + "."));
-		sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " rechazó tu solicitud."));
+		target.sendSystemMessage(Component.translatable("zumactions.info.you_rejected", sender.getGameProfile().getName()));
+		sender.sendSystemMessage(Component.translatable("zumactions.info.rejected_by", target.getGameProfile().getName()));
 	}
 
 	private static ServerPlayer resolveSoleSender(ServerPlayer target, String commandVerb) {
 		Map<UUID, PendingRequest> incoming = incomingByTarget.get(target.getUUID());
 		if (incoming == null || incoming.isEmpty()) {
-			target.sendSystemMessage(Component.literal("No tienes solicitudes pendientes."));
+			target.sendSystemMessage(Component.translatable("zumactions.error.no_pending_requests"));
 			return null;
 		}
 
@@ -206,15 +206,14 @@ public final class RequestManager {
 			String names = incoming.keySet().stream()
 					.map(id -> playerName(target.getServer(), id))
 					.collect(Collectors.joining(", "));
-			target.sendSystemMessage(Component.literal(
-					"Tenés varias solicitudes pendientes (" + names + "). Especificá de quién: /zumactions " + commandVerb + " <jugador>."));
+			target.sendSystemMessage(Component.translatable("zumactions.error.multiple_pending", names, commandVerb));
 			return null;
 		}
 
 		UUID senderId = incoming.keySet().iterator().next();
 		ServerPlayer sender = target.getServer().getPlayerList().getPlayer(senderId);
 		if (sender == null) {
-			target.sendSystemMessage(Component.literal("Ese jugador ya no está conectado."));
+			target.sendSystemMessage(Component.translatable("zumactions.error.player_offline"));
 			return null;
 		}
 		return sender;
@@ -251,11 +250,11 @@ public final class RequestManager {
 
 				ServerPlayer sender = server.getPlayerList().getPlayer(request.sender());
 				if (sender != null) {
-					sender.sendSystemMessage(Component.literal("Tu solicitud expiró."));
+					sender.sendSystemMessage(Component.translatable("zumactions.info.your_request_expired"));
 				}
 				ServerPlayer target = server.getPlayerList().getPlayer(request.target());
 				if (target != null) {
-					target.sendSystemMessage(Component.literal("La solicitud pendiente expiró."));
+					target.sendSystemMessage(Component.translatable("zumactions.info.incoming_request_expired"));
 					sendIncomingSnapshot(target);
 				}
 			}
@@ -272,7 +271,7 @@ public final class RequestManager {
 				outgoingBySender.remove(request.sender());
 				ServerPlayer sender = server.getPlayerList().getPlayer(request.sender());
 				if (sender != null) {
-					sender.sendSystemMessage(Component.literal("El jugador se desconectó, solicitud cancelada."));
+					sender.sendSystemMessage(Component.translatable("zumactions.info.sender_disconnected"));
 				}
 			}
 		}
@@ -282,7 +281,7 @@ public final class RequestManager {
 			if (removeIncoming(targetId, playerId) != null) {
 				ServerPlayer target = server.getPlayerList().getPlayer(targetId);
 				if (target != null) {
-					target.sendSystemMessage(Component.literal("La solicitud fue cancelada."));
+					target.sendSystemMessage(Component.translatable("zumactions.info.request_cancelled"));
 					sendIncomingSnapshot(target);
 				}
 			}
@@ -294,25 +293,25 @@ public final class RequestManager {
 
 	public static void block(ServerPlayer blocker, ServerPlayer toBlock) {
 		if (blocker.getUUID().equals(toBlock.getUUID())) {
-			blocker.sendSystemMessage(Component.literal("No podés bloquearte a vos mismo."));
+			blocker.sendSystemMessage(Component.translatable("zumactions.error.cant_block_self"));
 			return;
 		}
 
 		boolean added = BlockListData.get(blocker.getServer()).block(blocker.getUUID(), toBlock.getUUID());
 		if (!added) {
-			blocker.sendSystemMessage(Component.literal("Ya tenías bloqueado a " + toBlock.getGameProfile().getName() + "."));
+			blocker.sendSystemMessage(Component.translatable("zumactions.info.already_blocked", toBlock.getGameProfile().getName()));
 			return;
 		}
 
-		blocker.sendSystemMessage(Component.literal("Bloqueaste a " + toBlock.getGameProfile().getName() + "."));
+		blocker.sendSystemMessage(Component.translatable("zumactions.info.blocked", toBlock.getGameProfile().getName()));
 		cancelPendingRequestBetween(toBlock.getUUID(), blocker.getUUID(), blocker.getServer());
 	}
 
 	public static void unblock(ServerPlayer blocker, ServerPlayer toUnblock) {
 		boolean removed = BlockListData.get(blocker.getServer()).unblock(blocker.getUUID(), toUnblock.getUUID());
-		blocker.sendSystemMessage(Component.literal(removed
-				? "Desbloqueaste a " + toUnblock.getGameProfile().getName() + "."
-				: "No tenías bloqueado a " + toUnblock.getGameProfile().getName() + "."));
+		blocker.sendSystemMessage(removed
+				? Component.translatable("zumactions.info.unblocked", toUnblock.getGameProfile().getName())
+				: Component.translatable("zumactions.error.not_blocked", toUnblock.getGameProfile().getName()));
 	}
 
 	private static void cancelPendingRequestBetween(UUID senderId, UUID targetId, MinecraftServer server) {
@@ -328,7 +327,7 @@ public final class RequestManager {
 		}
 		ServerPlayer otherSender = server.getPlayerList().getPlayer(senderId);
 		if (otherSender != null) {
-			otherSender.sendSystemMessage(Component.literal("Tu solicitud fue cancelada."));
+			otherSender.sendSystemMessage(Component.translatable("zumactions.info.your_request_cancelled"));
 		}
 	}
 

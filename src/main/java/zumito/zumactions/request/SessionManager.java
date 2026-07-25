@@ -78,9 +78,9 @@ public final class SessionManager {
 			syncLeaderPassengers(leaderPlayer);
 		}
 
-		Component message = Component.literal(participants.size() > 1
-				? "playing animation together"
-				: "animation idle: " + emote.label());
+		Component message = participants.size() > 1
+				? Component.translatable("zumactions.info.playing_together")
+				: Component.translatable("zumactions.info.playing_solo", emote.label());
 		for (ServerPlayer player : participants) {
 			player.sendSystemMessage(message);
 		}
@@ -89,10 +89,10 @@ public final class SessionManager {
 	public static void stop(ServerPlayer player) {
 		ActiveSession session = sessionsByParticipant.get(player.getUUID());
 		if (session == null) {
-			player.sendSystemMessage(Component.literal("No tienes ninguna animación en curso."));
+			player.sendSystemMessage(Component.translatable("zumactions.error.no_active_session"));
 			return;
 		}
-		end(session, player.getServer(), "Animación detenida.");
+		end(session, player.getServer(), Component.translatable("zumactions.info.animation_stopped"));
 	}
 
 	private static void tick(MinecraftServer server) {
@@ -108,12 +108,12 @@ public final class SessionManager {
 			}
 
 			if (session.behavior() == EmoteBehavior.MOVEMENT && !isStillMounted(session, server)) {
-				end(session, server, "La animación terminó.");
+				end(session, server, null);
 				continue;
 			}
 
 			if (session.behavior() == EmoteBehavior.LOOP && didSomeoneMove(session, server)) {
-				end(session, server, "Se cortó porque alguien se movió.");
+				end(session, server, Component.translatable("zumactions.info.animation_moved"));
 			}
 		}
 	}
@@ -149,11 +149,11 @@ public final class SessionManager {
 	private static void onDisconnect(UUID playerId, MinecraftServer server) {
 		ActiveSession session = sessionsByParticipant.get(playerId);
 		if (session != null) {
-			end(session, server, "El jugador se desconectó, animación cancelada.");
+			end(session, server, Component.translatable("zumactions.info.animation_disconnect"));
 		}
 	}
 
-	private static void end(ActiveSession session, MinecraftServer server, String customMessage) {
+	private static void end(ActiveSession session, MinecraftServer server, Component customMessage) {
 		for (UUID id : session.participants()) {
 			sessionsByParticipant.remove(id);
 		}
@@ -169,7 +169,7 @@ public final class SessionManager {
 			}
 		}
 
-		Component message = Component.literal(customMessage != null ? customMessage : "La animación terminó.");
+		Component message = customMessage != null ? customMessage : Component.translatable("zumactions.info.animation_ended");
 		for (UUID id : session.participants()) {
 			ServerPlayer player = server.getPlayerList().getPlayer(id);
 			if (player != null) {

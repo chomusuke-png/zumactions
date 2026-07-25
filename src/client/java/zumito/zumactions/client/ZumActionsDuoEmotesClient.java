@@ -36,9 +36,7 @@ public class ZumActionsDuoEmotesClient implements ClientModInitializer {
 		ClientPlayNetworking.registerGlobalReceiver(PendingRequestsPayload.TYPE, (payload, context) -> {
 			List<PendingRequestsPayload.Entry> added = ClientPendingRequests.update(payload.requests());
 			if (!added.isEmpty()) {
-				Component message = Component.literal("Miralo y presioná ")
-						.append(ACCEPT_KEY.getTranslatedKeyMessage())
-						.append(Component.literal(" para aceptar."));
+				Component message = Component.translatable("zumactions.hud.press_to_accept", ACCEPT_KEY.getTranslatedKeyMessage());
 				context.player().displayClientMessage(message, false);
 			}
 		});

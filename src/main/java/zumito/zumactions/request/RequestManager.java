@@ -2,9 +2,11 @@ package zumito.zumactions.request;
 
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
@@ -21,8 +23,10 @@ import zumito.zumactions.emote.EmoteParticipants;
 import zumito.zumactions.emote.EmoteRegistry;
 
 // Estado autoritativo en el servidor de las solicitudes pendientes.
-// Invariante: como máximo una solicitud entrante por destinatario y una saliente por emisor,
-// ambos mapas se actualizan siempre juntos (ver clearRequest).
+// Invariante: como máximo MAX_INCOMING_REQUESTS entrantes por destinatario (una por cada
+// emisor distinto) y una saliente por emisor. incomingByTarget es un mapa anidado
+// (destinatario -> emisor -> solicitud) para poder tener varias entrantes a la vez sin
+// perder la posibilidad de identificar de quién es cada una.
 //
 // Anti-abuso: cooldown global corto por emisor (frena macros/spam a cualquiera) + cooldown
 // más largo por par emisor-destino después de un rechazo o timeout (frena insistirle a la
@@ -33,8 +37,9 @@ public final class RequestManager {
 	private static final double MAX_DISTANCE = 5.0;
 	private static final int GLOBAL_COOLDOWN_TICKS = 3 * 20;
 	private static final int PAIR_COOLDOWN_TICKS = 60 * 20;
+	private static final int MAX_INCOMING_REQUESTS = 3;
 
-	private static final Map<UUID, PendingRequest> incomingByTarget = new HashMap<>();
+	private static final Map<UUID, Map<UUID, PendingRequest>> incomingByTarget = new HashMap<>();
 	private static final Map<UUID, UUID> outgoingBySender = new HashMap<>();
 	private static final Map<UUID, Long> lastRequestTick = new HashMap<>();
 	private static final Map<PairKey, Long> pairCooldownUntilTick = new HashMap<>();
@@ -103,32 +108,35 @@ public final class RequestManager {
 			return;
 		}
 
-		PendingRequest existingIncoming = incomingByTarget.get(targetId);
-		if (existingIncoming != null && !existingIncoming.sender().equals(senderId)) {
-			sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " ya tiene una solicitud pendiente de otro jugador."));
+		Map<UUID, PendingRequest> targetIncoming = incomingByTarget.get(targetId);
+		boolean alreadyPendingFromSender = targetIncoming != null && targetIncoming.containsKey(senderId);
+		if (!alreadyPendingFromSender && targetIncoming != null && targetIncoming.size() >= MAX_INCOMING_REQUESTS) {
+			sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " ya tiene el máximo de solicitudes pendientes."));
 			return;
 		}
 
 		UUID previousTarget = outgoingBySender.get(senderId);
 		if (previousTarget != null && !previousTarget.equals(targetId)) {
-			incomingByTarget.remove(previousTarget);
-			ServerPlayer previousTargetPlayer = server.getPlayerList().getPlayer(previousTarget);
-			if (previousTargetPlayer != null) {
-				previousTargetPlayer.sendSystemMessage(Component.literal(sender.getGameProfile().getName() + " canceló su solicitud anterior."));
+			if (removeIncoming(previousTarget, senderId) != null) {
+				ServerPlayer previousTargetPlayer = server.getPlayerList().getPlayer(previousTarget);
+				if (previousTargetPlayer != null) {
+					previousTargetPlayer.sendSystemMessage(Component.literal(sender.getGameProfile().getName() + " canceló su solicitud anterior."));
+				}
 			}
 		}
 
 		PendingRequest request = new PendingRequest(senderId, targetId, emote.id(), currentTick + TIMEOUT_TICKS);
-		incomingByTarget.put(targetId, request);
+		incomingByTarget.computeIfAbsent(targetId, id -> new LinkedHashMap<>()).put(senderId, request);
 		outgoingBySender.put(senderId, targetId);
 		lastRequestTick.put(senderId, currentTick);
 
 		sender.sendSystemMessage(Component.literal("Solicitud enviada a " + target.getGameProfile().getName() + ". animation idle"));
 
-		MutableComponent invite = Component.literal(sender.getGameProfile().getName() + " te invitó a: " + emote.label() + " ")
-				.append(actionButton("[Aceptar]", ChatFormatting.GREEN, "/zumactions accept", "Click para aceptar"))
+		String senderName = sender.getGameProfile().getName();
+		MutableComponent invite = Component.literal(senderName + " te invitó a: " + emote.label() + " ")
+				.append(actionButton("[Aceptar]", ChatFormatting.GREEN, "/zumactions accept " + senderName, "Click para aceptar"))
 				.append(Component.literal(" "))
-				.append(actionButton("[Rechazar]", ChatFormatting.RED, "/zumactions reject", "Click para rechazar"));
+				.append(actionButton("[Rechazar]", ChatFormatting.RED, "/zumactions reject " + senderName, "Click para rechazar"));
 		target.sendSystemMessage(invite);
 	}
 
@@ -141,18 +149,19 @@ public final class RequestManager {
 		return Component.literal(text).setStyle(style);
 	}
 
-	public static void accept(ServerPlayer target) {
-		PendingRequest request = incomingByTarget.get(target.getUUID());
-		if (request == null) {
-			target.sendSystemMessage(Component.literal("No tienes solicitudes pendientes."));
-			return;
+	// Sin especificar emisor: solo funciona si hay una única solicitud entrante (el caso
+	// común). Con varias, hay que decir de quién con /zumactions accept <jugador>.
+	public static void acceptAny(ServerPlayer target) {
+		ServerPlayer sender = resolveSoleSender(target, "accept");
+		if (sender != null) {
+			accept(target, sender);
 		}
+	}
 
-		MinecraftServer server = target.getServer();
-		ServerPlayer sender = server.getPlayerList().getPlayer(request.sender());
-		if (sender == null) {
-			clearRequest(request);
-			target.sendSystemMessage(Component.literal("Ese jugador ya no está conectado."));
+	public static void accept(ServerPlayer target, ServerPlayer sender) {
+		PendingRequest request = getIncoming(target.getUUID(), sender.getUUID());
+		if (request == null) {
+			target.sendSystemMessage(Component.literal("No tenés una solicitud pendiente de " + sender.getGameProfile().getName() + "."));
 			return;
 		}
 
@@ -178,21 +187,54 @@ public final class RequestManager {
 		SessionManager.start(List.of(sender, target), emote);
 	}
 
-	public static void reject(ServerPlayer target) {
-		PendingRequest request = incomingByTarget.get(target.getUUID());
+	public static void rejectAny(ServerPlayer target) {
+		ServerPlayer sender = resolveSoleSender(target, "reject");
+		if (sender != null) {
+			reject(target, sender);
+		}
+	}
+
+	public static void reject(ServerPlayer target, ServerPlayer sender) {
+		PendingRequest request = getIncoming(target.getUUID(), sender.getUUID());
 		if (request == null) {
-			target.sendSystemMessage(Component.literal("No tienes solicitudes pendientes."));
+			target.sendSystemMessage(Component.literal("No tenés una solicitud pendiente de " + sender.getGameProfile().getName() + "."));
 			return;
 		}
 
 		clearRequest(request);
 		startPairCooldown(target.getServer(), request);
-		target.sendSystemMessage(Component.literal("Rechazaste la solicitud."));
+		target.sendSystemMessage(Component.literal("Rechazaste la solicitud de " + sender.getGameProfile().getName() + "."));
+		sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " rechazó tu solicitud."));
+	}
 
-		ServerPlayer sender = target.getServer().getPlayerList().getPlayer(request.sender());
-		if (sender != null) {
-			sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " rechazó tu solicitud."));
+	private static ServerPlayer resolveSoleSender(ServerPlayer target, String commandVerb) {
+		Map<UUID, PendingRequest> incoming = incomingByTarget.get(target.getUUID());
+		if (incoming == null || incoming.isEmpty()) {
+			target.sendSystemMessage(Component.literal("No tienes solicitudes pendientes."));
+			return null;
 		}
+
+		if (incoming.size() > 1) {
+			String names = incoming.keySet().stream()
+					.map(id -> playerName(target.getServer(), id))
+					.collect(Collectors.joining(", "));
+			target.sendSystemMessage(Component.literal(
+					"Tenés varias solicitudes pendientes (" + names + "). Especificá de quién: /zumactions " + commandVerb + " <jugador>."));
+			return null;
+		}
+
+		UUID senderId = incoming.keySet().iterator().next();
+		ServerPlayer sender = target.getServer().getPlayerList().getPlayer(senderId);
+		if (sender == null) {
+			target.sendSystemMessage(Component.literal("Ese jugador ya no está conectado."));
+			return null;
+		}
+		return sender;
+	}
+
+	private static String playerName(MinecraftServer server, UUID id) {
+		ServerPlayer player = server.getPlayerList().getPlayer(id);
+		return player != null ? player.getGameProfile().getName() : id.toString();
 	}
 
 	private static void startPairCooldown(MinecraftServer server, PendingRequest request) {
@@ -205,44 +247,54 @@ public final class RequestManager {
 		}
 
 		long currentTick = server.getTickCount();
-		Iterator<PendingRequest> iterator = incomingByTarget.values().iterator();
-		while (iterator.hasNext()) {
-			PendingRequest request = iterator.next();
-			if (request.expiresAtTick() > currentTick) {
-				continue;
-			}
+		Iterator<Map<UUID, PendingRequest>> targetIterator = incomingByTarget.values().iterator();
+		while (targetIterator.hasNext()) {
+			Map<UUID, PendingRequest> byTarget = targetIterator.next();
+			Iterator<PendingRequest> requestIterator = byTarget.values().iterator();
+			while (requestIterator.hasNext()) {
+				PendingRequest request = requestIterator.next();
+				if (request.expiresAtTick() > currentTick) {
+					continue;
+				}
 
-			iterator.remove();
-			outgoingBySender.remove(request.sender());
-			startPairCooldown(server, request);
+				requestIterator.remove();
+				outgoingBySender.remove(request.sender());
+				startPairCooldown(server, request);
 
-			ServerPlayer sender = server.getPlayerList().getPlayer(request.sender());
-			if (sender != null) {
-				sender.sendSystemMessage(Component.literal("Tu solicitud expiró."));
+				ServerPlayer sender = server.getPlayerList().getPlayer(request.sender());
+				if (sender != null) {
+					sender.sendSystemMessage(Component.literal("Tu solicitud expiró."));
+				}
+				ServerPlayer target = server.getPlayerList().getPlayer(request.target());
+				if (target != null) {
+					target.sendSystemMessage(Component.literal("La solicitud pendiente expiró."));
+				}
 			}
-			ServerPlayer target = server.getPlayerList().getPlayer(request.target());
-			if (target != null) {
-				target.sendSystemMessage(Component.literal("La solicitud pendiente expiró."));
+			if (byTarget.isEmpty()) {
+				targetIterator.remove();
 			}
 		}
 	}
 
 	private static void onDisconnect(UUID playerId, MinecraftServer server) {
-		PendingRequest asTarget = incomingByTarget.remove(playerId);
+		Map<UUID, PendingRequest> asTarget = incomingByTarget.remove(playerId);
 		if (asTarget != null) {
-			outgoingBySender.remove(asTarget.sender());
-			ServerPlayer sender = server.getPlayerList().getPlayer(asTarget.sender());
-			if (sender != null) {
-				sender.sendSystemMessage(Component.literal("El jugador se desconectó, solicitud cancelada."));
+			for (PendingRequest request : asTarget.values()) {
+				outgoingBySender.remove(request.sender());
+				ServerPlayer sender = server.getPlayerList().getPlayer(request.sender());
+				if (sender != null) {
+					sender.sendSystemMessage(Component.literal("El jugador se desconectó, solicitud cancelada."));
+				}
 			}
 		}
 
 		UUID targetId = outgoingBySender.remove(playerId);
 		if (targetId != null) {
-			incomingByTarget.remove(targetId);
-			ServerPlayer target = server.getPlayerList().getPlayer(targetId);
-			if (target != null) {
-				target.sendSystemMessage(Component.literal("La solicitud fue cancelada."));
+			if (removeIncoming(targetId, playerId) != null) {
+				ServerPlayer target = server.getPlayerList().getPlayer(targetId);
+				if (target != null) {
+					target.sendSystemMessage(Component.literal("La solicitud fue cancelada."));
+				}
 			}
 		}
 
@@ -274,8 +326,8 @@ public final class RequestManager {
 	}
 
 	private static void cancelPendingRequestBetween(UUID senderId, UUID targetId, MinecraftServer server) {
-		PendingRequest request = incomingByTarget.get(targetId);
-		if (request == null || !request.sender().equals(senderId)) {
+		PendingRequest request = getIncoming(targetId, senderId);
+		if (request == null) {
 			return;
 		}
 
@@ -286,8 +338,25 @@ public final class RequestManager {
 		}
 	}
 
+	private static PendingRequest getIncoming(UUID targetId, UUID senderId) {
+		Map<UUID, PendingRequest> byTarget = incomingByTarget.get(targetId);
+		return byTarget != null ? byTarget.get(senderId) : null;
+	}
+
+	private static PendingRequest removeIncoming(UUID targetId, UUID senderId) {
+		Map<UUID, PendingRequest> byTarget = incomingByTarget.get(targetId);
+		if (byTarget == null) {
+			return null;
+		}
+		PendingRequest removed = byTarget.remove(senderId);
+		if (byTarget.isEmpty()) {
+			incomingByTarget.remove(targetId);
+		}
+		return removed;
+	}
+
 	private static void clearRequest(PendingRequest request) {
-		incomingByTarget.remove(request.target());
+		removeIncoming(request.target(), request.sender());
 		outgoingBySender.remove(request.sender());
 	}
 }

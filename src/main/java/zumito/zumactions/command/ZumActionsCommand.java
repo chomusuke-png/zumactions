@@ -29,8 +29,12 @@ public final class ZumActionsCommand {
 								.then(Commands.argument("emote", StringArgumentType.greedyString())
 										.suggests(EMOTE_SUGGESTIONS)
 										.executes(ZumActionsCommand::request)))
-						.then(Commands.literal("accept").executes(ZumActionsCommand::accept))
-						.then(Commands.literal("reject").executes(ZumActionsCommand::reject))
+						.then(Commands.literal("accept")
+								.executes(ZumActionsCommand::acceptAny)
+								.then(Commands.argument("player", EntityArgument.player()).executes(ZumActionsCommand::accept)))
+						.then(Commands.literal("reject")
+								.executes(ZumActionsCommand::rejectAny)
+								.then(Commands.argument("player", EntityArgument.player()).executes(ZumActionsCommand::reject)))
 						.then(Commands.literal("stop").executes(ZumActionsCommand::stop))
 						.then(Commands.literal("block")
 								.then(Commands.argument("player", EntityArgument.player()).executes(ZumActionsCommand::block)))
@@ -46,13 +50,27 @@ public final class ZumActionsCommand {
 		return 1;
 	}
 
+	private static int acceptAny(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		RequestManager.acceptAny(context.getSource().getPlayerOrException());
+		return 1;
+	}
+
 	private static int accept(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-		RequestManager.accept(context.getSource().getPlayerOrException());
+		ServerPlayer target = context.getSource().getPlayerOrException();
+		ServerPlayer sender = EntityArgument.getPlayer(context, "player");
+		RequestManager.accept(target, sender);
+		return 1;
+	}
+
+	private static int rejectAny(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		RequestManager.rejectAny(context.getSource().getPlayerOrException());
 		return 1;
 	}
 
 	private static int reject(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-		RequestManager.reject(context.getSource().getPlayerOrException());
+		ServerPlayer target = context.getSource().getPlayerOrException();
+		ServerPlayer sender = EntityArgument.getPlayer(context, "player");
+		RequestManager.reject(target, sender);
 		return 1;
 	}
 

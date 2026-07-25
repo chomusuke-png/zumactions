@@ -1,0 +1,35 @@
+{
+	"schemaVersion": 1,
+	"id": "zumactions",
+	"version": "${version}",
+	"name": "ZumActions — Duo Emotes",
+	"description": "Mod en desarrollo sobre interacciones sociales.",
+	"authors": [
+		"Zumito"
+	],
+	"contact": {},
+	"license": "MIT",
+	"icon": "assets/zumactions/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"zumito.zumactions.ZumActionsDuoEmotes"
+		],
+		"client": [
+			"zumito.zumactions.client.ZumActionsDuoEmotesClient"
+		]
+	},
+	"mixins": [
+		"zumactions.mixins.json",
+		{
+			"config": "zumactions.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~1.21.1",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}

@@ -10,6 +10,7 @@ import java.util.UUID;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundSetPassengersPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import zumito.zumactions.emote.EmoteBehavior;
@@ -19,9 +20,19 @@ import zumito.zumactions.emote.EmoteDefinition;
 // Separado de RequestManager, que solo maneja el ciclo de vida de la solicitud previa
 // a que el emote arranque.
 //
-// Por ahora LOOP y MOVEMENT solo terminan con /zumactions stop o desconexión: la
-// cancelación automática por movimiento (LOOP) y por desmonte (MOVEMENT) se agrega
-// en los próximos pasos.
+// MOVEMENT usa el sistema nativo de passengers de Minecraft: el líder (quien pidió el
+// emote) es el "vehicle", el resto son passengers. El desmonte por agacharse (shift) lo
+// maneja Minecraft solo; acá solo detectamos cuando ya no están montados para limpiar
+// la sesión.
+//
+// Minecraft nunca le avisa a un jugador sobre cambios en los passengers de SU PROPIA
+// entidad (ChunkMap$TrackedEntity#updatePlayer excluye explícitamente al dueño de la
+// entidad de su propia lista de "seenBy") porque en vanilla un jugador nunca es vehicle
+// de otro jugador. Como acá sí lo es, hay que reenviarle el ClientboundSetPassengersPacket
+// a mano al líder cada vez que su lista de passengers cambia (ver syncLeaderPassengers).
+//
+// LOOP todavía no se corta por movimiento (queda para el próximo paso); por ahora solo
+// termina con /zumactions stop o desconexión.
 public final class SessionManager {
 	private static final Map<UUID, ActiveSession> sessionsByParticipant = new HashMap<>();
 
@@ -44,9 +55,17 @@ public final class SessionManager {
 				: ActiveSession.NO_EXPIRY;
 
 		List<UUID> ids = participants.stream().map(ServerPlayer::getUUID).toList();
-		ActiveSession session = new ActiveSession(ids, emote.id(), expiresAtTick);
+		UUID leader = emote.behavior() == EmoteBehavior.MOVEMENT ? participants.get(0).getUUID() : null;
+		ActiveSession session = new ActiveSession(ids, emote.id(), emote.behavior(), leader, expiresAtTick);
 		for (UUID id : ids) {
 			sessionsByParticipant.put(id, session);
+		}
+
+		if (emote.behavior() == EmoteBehavior.MOVEMENT) {
+			ServerPlayer leaderPlayer = participants.get(0);
+			ServerPlayer passenger = participants.get(1);
+			passenger.startRiding(leaderPlayer, true);
+			syncLeaderPassengers(leaderPlayer);
 		}
 
 		Component message = Component.literal(participants.size() > 1
@@ -75,8 +94,27 @@ public final class SessionManager {
 		for (ActiveSession session : distinctSessions()) {
 			if (session.expires() && session.expiresAtTick() <= currentTick) {
 				end(session, server, null);
+				continue;
+			}
+
+			if (session.behavior() == EmoteBehavior.MOVEMENT && !isStillMounted(session, server)) {
+				end(session, server, "La animación terminó.");
 			}
 		}
+	}
+
+	private static boolean isStillMounted(ActiveSession session, MinecraftServer server) {
+		ServerPlayer leader = server.getPlayerList().getPlayer(session.leader());
+		ServerPlayer passenger = passengerOf(session, server);
+		return leader != null && passenger != null && passenger.isPassenger() && passenger.getVehicle() == leader;
+	}
+
+	private static ServerPlayer passengerOf(ActiveSession session, MinecraftServer server) {
+		return session.participants().stream()
+				.filter(id -> !id.equals(session.leader()))
+				.findFirst()
+				.map(id -> server.getPlayerList().getPlayer(id))
+				.orElse(null);
 	}
 
 	private static void onDisconnect(UUID playerId, MinecraftServer server) {
@@ -91,6 +129,17 @@ public final class SessionManager {
 			sessionsByParticipant.remove(id);
 		}
 
+		if (session.behavior() == EmoteBehavior.MOVEMENT) {
+			ServerPlayer passenger = passengerOf(session, server);
+			if (passenger != null && passenger.isPassenger()) {
+				passenger.stopRiding();
+			}
+			ServerPlayer leaderPlayer = server.getPlayerList().getPlayer(session.leader());
+			if (leaderPlayer != null) {
+				syncLeaderPassengers(leaderPlayer);
+			}
+		}
+
 		Component message = Component.literal(customMessage != null ? customMessage : "La animación terminó.");
 		for (UUID id : session.participants()) {
 			ServerPlayer player = server.getPlayerList().getPlayer(id);
@@ -102,5 +151,11 @@ public final class SessionManager {
 
 	private static Set<ActiveSession> distinctSessions() {
 		return new HashSet<>(sessionsByParticipant.values());
+	}
+
+	// Ver nota de clase: un jugador nunca recibe el ClientboundSetPassengersPacket sobre
+	// su propia entidad a través del sistema normal de tracking, hay que mandárselo directo.
+	private static void syncLeaderPassengers(ServerPlayer leader) {
+		leader.connection.send(new ClientboundSetPassengersPacket(leader));
 	}
 }

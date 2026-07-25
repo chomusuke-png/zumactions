@@ -10,17 +10,14 @@ import java.util.stream.Collectors;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
-import net.minecraft.ChatFormatting;
-import net.minecraft.network.chat.ClickEvent;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.HoverEvent;
-import net.minecraft.network.chat.MutableComponent;
-import net.minecraft.network.chat.Style;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import zumito.zumactions.emote.EmoteDefinition;
 import zumito.zumactions.emote.EmoteParticipants;
 import zumito.zumactions.emote.EmoteRegistry;
+import zumito.zumactions.network.PendingRequestsPayload;
 
 // Estado autoritativo en el servidor de las solicitudes pendientes.
 // Invariante: como máximo MAX_INCOMING_REQUESTS entrantes por destinatario (una por cada
@@ -121,6 +118,7 @@ public final class RequestManager {
 				ServerPlayer previousTargetPlayer = server.getPlayerList().getPlayer(previousTarget);
 				if (previousTargetPlayer != null) {
 					previousTargetPlayer.sendSystemMessage(Component.literal(sender.getGameProfile().getName() + " canceló su solicitud anterior."));
+					sendIncomingSnapshot(previousTargetPlayer);
 				}
 			}
 		}
@@ -129,24 +127,11 @@ public final class RequestManager {
 		incomingByTarget.computeIfAbsent(targetId, id -> new LinkedHashMap<>()).put(senderId, request);
 		outgoingBySender.put(senderId, targetId);
 		lastRequestTick.put(senderId, currentTick);
+		sendIncomingSnapshot(target);
 
 		sender.sendSystemMessage(Component.literal("Solicitud enviada a " + target.getGameProfile().getName() + ". animation idle"));
 
-		String senderName = sender.getGameProfile().getName();
-		MutableComponent invite = Component.literal(senderName + " te invitó a: " + emote.label() + " ")
-				.append(actionButton("[Aceptar]", ChatFormatting.GREEN, "/zumactions accept " + senderName, "Click para aceptar"))
-				.append(Component.literal(" "))
-				.append(actionButton("[Rechazar]", ChatFormatting.RED, "/zumactions reject " + senderName, "Click para rechazar"));
-		target.sendSystemMessage(invite);
-	}
-
-	private static MutableComponent actionButton(String text, ChatFormatting color, String command, String hoverText) {
-		Style style = Style.EMPTY
-				.withColor(color)
-				.withBold(true)
-				.withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, command))
-				.withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal(hoverText)));
-		return Component.literal(text).setStyle(style);
+		target.sendSystemMessage(Component.literal(sender.getGameProfile().getName() + " te invitó a: " + emote.label() + "."));
 	}
 
 	// Sin especificar emisor: solo funciona si hay una única solicitud entrante (el caso
@@ -167,6 +152,7 @@ public final class RequestManager {
 
 		if (sender.level() != target.level() || sender.distanceTo(target) > MAX_DISTANCE) {
 			clearRequest(request);
+			sendIncomingSnapshot(target);
 			Component tooFar = Component.literal("Están muy lejos para hacer esto.");
 			sender.sendSystemMessage(tooFar);
 			target.sendSystemMessage(tooFar);
@@ -183,6 +169,7 @@ public final class RequestManager {
 		}
 
 		clearRequest(request);
+		sendIncomingSnapshot(target);
 		EmoteDefinition emote = EmoteRegistry.get(request.emoteId());
 		SessionManager.start(List.of(sender, target), emote);
 	}
@@ -202,6 +189,7 @@ public final class RequestManager {
 		}
 
 		clearRequest(request);
+		sendIncomingSnapshot(target);
 		startPairCooldown(target.getServer(), request);
 		target.sendSystemMessage(Component.literal("Rechazaste la solicitud de " + sender.getGameProfile().getName() + "."));
 		sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " rechazó tu solicitud."));
@@ -268,6 +256,7 @@ public final class RequestManager {
 				ServerPlayer target = server.getPlayerList().getPlayer(request.target());
 				if (target != null) {
 					target.sendSystemMessage(Component.literal("La solicitud pendiente expiró."));
+					sendIncomingSnapshot(target);
 				}
 			}
 			if (byTarget.isEmpty()) {
@@ -294,6 +283,7 @@ public final class RequestManager {
 				ServerPlayer target = server.getPlayerList().getPlayer(targetId);
 				if (target != null) {
 					target.sendSystemMessage(Component.literal("La solicitud fue cancelada."));
+					sendIncomingSnapshot(target);
 				}
 			}
 		}
@@ -332,6 +322,10 @@ public final class RequestManager {
 		}
 
 		clearRequest(request);
+		ServerPlayer blockerTarget = server.getPlayerList().getPlayer(targetId);
+		if (blockerTarget != null) {
+			sendIncomingSnapshot(blockerTarget);
+		}
 		ServerPlayer otherSender = server.getPlayerList().getPlayer(senderId);
 		if (otherSender != null) {
 			otherSender.sendSystemMessage(Component.literal("Tu solicitud fue cancelada."));
@@ -358,5 +352,19 @@ public final class RequestManager {
 	private static void clearRequest(PendingRequest request) {
 		removeIncoming(request.target(), request.sender());
 		outgoingBySender.remove(request.sender());
+	}
+
+	// Le manda al destinatario el snapshot completo de sus solicitudes entrantes, para
+	// que el cliente dibuje (o deje de dibujar) el tag flotante sobre cada emisor.
+	static void sendIncomingSnapshot(ServerPlayer target) {
+		Map<UUID, PendingRequest> incoming = incomingByTarget.getOrDefault(target.getUUID(), Map.of());
+		List<PendingRequestsPayload.Entry> entries = incoming.values().stream()
+				.map(request -> {
+					EmoteDefinition emote = EmoteRegistry.get(request.emoteId());
+					String label = emote != null ? emote.label() : request.emoteId();
+					return new PendingRequestsPayload.Entry(request.sender(), label);
+				})
+				.toList();
+		ServerPlayNetworking.send(target, new PendingRequestsPayload(entries));
 	}
 }

@@ -26,12 +26,16 @@ public final class ZumActionsCommand {
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
 				dispatcher.register(Commands.literal("zumactions")
 						.then(Commands.argument("target", EntityArgument.player())
-								.then(Commands.argument("emote", StringArgumentType.word())
+								.then(Commands.argument("emote", StringArgumentType.greedyString())
 										.suggests(EMOTE_SUGGESTIONS)
 										.executes(ZumActionsCommand::request)))
 						.then(Commands.literal("accept").executes(ZumActionsCommand::accept))
 						.then(Commands.literal("reject").executes(ZumActionsCommand::reject))
-						.then(Commands.literal("stop").executes(ZumActionsCommand::stop))));
+						.then(Commands.literal("stop").executes(ZumActionsCommand::stop))
+						.then(Commands.literal("block")
+								.then(Commands.argument("player", EntityArgument.player()).executes(ZumActionsCommand::block)))
+						.then(Commands.literal("unblock")
+								.then(Commands.argument("player", EntityArgument.player()).executes(ZumActionsCommand::unblock)))));
 	}
 
 	private static int request(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
@@ -54,6 +58,20 @@ public final class ZumActionsCommand {
 
 	private static int stop(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
 		SessionManager.stop(context.getSource().getPlayerOrException());
+		return 1;
+	}
+
+	private static int block(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer blocker = context.getSource().getPlayerOrException();
+		ServerPlayer toBlock = EntityArgument.getPlayer(context, "player");
+		RequestManager.block(blocker, toBlock);
+		return 1;
+	}
+
+	private static int unblock(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+		ServerPlayer blocker = context.getSource().getPlayerOrException();
+		ServerPlayer toUnblock = EntityArgument.getPlayer(context, "player");
+		RequestManager.unblock(blocker, toUnblock);
 		return 1;
 	}
 }

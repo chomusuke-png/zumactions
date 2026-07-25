@@ -23,12 +23,24 @@ import zumito.zumactions.emote.EmoteRegistry;
 // Estado autoritativo en el servidor de las solicitudes pendientes.
 // Invariante: como máximo una solicitud entrante por destinatario y una saliente por emisor,
 // ambos mapas se actualizan siempre juntos (ver clearRequest).
+//
+// Anti-abuso: cooldown global corto por emisor (frena macros/spam a cualquiera) + cooldown
+// más largo por par emisor-destino después de un rechazo o timeout (frena insistirle a la
+// misma persona hasta que ceda). Ninguno de los dos aplica al auto-target SOLO, porque ahí
+// no hay a quién molestar. También hay bloqueo persistente vía BlockListData.
 public final class RequestManager {
 	private static final int TIMEOUT_TICKS = 30 * 20;
 	private static final double MAX_DISTANCE = 5.0;
+	private static final int GLOBAL_COOLDOWN_TICKS = 3 * 20;
+	private static final int PAIR_COOLDOWN_TICKS = 60 * 20;
 
 	private static final Map<UUID, PendingRequest> incomingByTarget = new HashMap<>();
 	private static final Map<UUID, UUID> outgoingBySender = new HashMap<>();
+	private static final Map<UUID, Long> lastRequestTick = new HashMap<>();
+	private static final Map<PairKey, Long> pairCooldownUntilTick = new HashMap<>();
+
+	private record PairKey(UUID sender, UUID target) {
+	}
 
 	private RequestManager() {
 	}
@@ -68,6 +80,29 @@ public final class RequestManager {
 			return;
 		}
 
+		if (SessionManager.isBusy(senderId)) {
+			sender.sendSystemMessage(Component.literal("Ya tienes una animación en curso. Usa /zumactions stop primero."));
+			return;
+		}
+
+		if (BlockListData.get(server).isBlocked(targetId, senderId)) {
+			sender.sendSystemMessage(Component.literal("No podés enviarle una solicitud a ese jugador."));
+			return;
+		}
+
+		long currentTick = server.getTickCount();
+		Long lastRequest = lastRequestTick.get(senderId);
+		if (lastRequest != null && currentTick - lastRequest < GLOBAL_COOLDOWN_TICKS) {
+			sender.sendSystemMessage(Component.literal("Esperá un momento antes de mandar otra solicitud."));
+			return;
+		}
+
+		Long pairCooldown = pairCooldownUntilTick.get(new PairKey(senderId, targetId));
+		if (pairCooldown != null && pairCooldown > currentTick) {
+			sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " no está aceptando solicitudes tuyas por ahora, esperá un poco."));
+			return;
+		}
+
 		PendingRequest existingIncoming = incomingByTarget.get(targetId);
 		if (existingIncoming != null && !existingIncoming.sender().equals(senderId)) {
 			sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " ya tiene una solicitud pendiente de otro jugador."));
@@ -83,10 +118,10 @@ public final class RequestManager {
 			}
 		}
 
-		long expiresAtTick = server.getTickCount() + TIMEOUT_TICKS;
-		PendingRequest request = new PendingRequest(senderId, targetId, emote.id(), expiresAtTick);
+		PendingRequest request = new PendingRequest(senderId, targetId, emote.id(), currentTick + TIMEOUT_TICKS);
 		incomingByTarget.put(targetId, request);
 		outgoingBySender.put(senderId, targetId);
+		lastRequestTick.put(senderId, currentTick);
 
 		sender.sendSystemMessage(Component.literal("Solicitud enviada a " + target.getGameProfile().getName() + ". animation idle"));
 
@@ -151,12 +186,17 @@ public final class RequestManager {
 		}
 
 		clearRequest(request);
+		startPairCooldown(target.getServer(), request);
 		target.sendSystemMessage(Component.literal("Rechazaste la solicitud."));
 
 		ServerPlayer sender = target.getServer().getPlayerList().getPlayer(request.sender());
 		if (sender != null) {
 			sender.sendSystemMessage(Component.literal(target.getGameProfile().getName() + " rechazó tu solicitud."));
 		}
+	}
+
+	private static void startPairCooldown(MinecraftServer server, PendingRequest request) {
+		pairCooldownUntilTick.put(new PairKey(request.sender(), request.target()), (long) server.getTickCount() + PAIR_COOLDOWN_TICKS);
 	}
 
 	private static void tick(MinecraftServer server) {
@@ -174,6 +214,7 @@ public final class RequestManager {
 
 			iterator.remove();
 			outgoingBySender.remove(request.sender());
+			startPairCooldown(server, request);
 
 			ServerPlayer sender = server.getPlayerList().getPlayer(request.sender());
 			if (sender != null) {
@@ -203,6 +244,45 @@ public final class RequestManager {
 			if (target != null) {
 				target.sendSystemMessage(Component.literal("La solicitud fue cancelada."));
 			}
+		}
+
+		lastRequestTick.remove(playerId);
+		pairCooldownUntilTick.keySet().removeIf(key -> key.sender().equals(playerId) || key.target().equals(playerId));
+	}
+
+	public static void block(ServerPlayer blocker, ServerPlayer toBlock) {
+		if (blocker.getUUID().equals(toBlock.getUUID())) {
+			blocker.sendSystemMessage(Component.literal("No podés bloquearte a vos mismo."));
+			return;
+		}
+
+		boolean added = BlockListData.get(blocker.getServer()).block(blocker.getUUID(), toBlock.getUUID());
+		if (!added) {
+			blocker.sendSystemMessage(Component.literal("Ya tenías bloqueado a " + toBlock.getGameProfile().getName() + "."));
+			return;
+		}
+
+		blocker.sendSystemMessage(Component.literal("Bloqueaste a " + toBlock.getGameProfile().getName() + "."));
+		cancelPendingRequestBetween(toBlock.getUUID(), blocker.getUUID(), blocker.getServer());
+	}
+
+	public static void unblock(ServerPlayer blocker, ServerPlayer toUnblock) {
+		boolean removed = BlockListData.get(blocker.getServer()).unblock(blocker.getUUID(), toUnblock.getUUID());
+		blocker.sendSystemMessage(Component.literal(removed
+				? "Desbloqueaste a " + toUnblock.getGameProfile().getName() + "."
+				: "No tenías bloqueado a " + toUnblock.getGameProfile().getName() + "."));
+	}
+
+	private static void cancelPendingRequestBetween(UUID senderId, UUID targetId, MinecraftServer server) {
+		PendingRequest request = incomingByTarget.get(targetId);
+		if (request == null || !request.sender().equals(senderId)) {
+			return;
+		}
+
+		clearRequest(request);
+		ServerPlayer otherSender = server.getPlayerList().getPlayer(senderId);
+		if (otherSender != null) {
+			otherSender.sendSystemMessage(Component.literal("Tu solicitud fue cancelada."));
 		}
 	}
 

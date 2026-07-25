@@ -5,37 +5,38 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
-// Registro en memoria por ahora. Pensado para que el consumidor (comandos, RequestManager,
-// SessionManager) solo dependa de EmoteRegistry#get e ids(), así después esto se puede
-// reemplazar por un SimpleJsonResourceReloadListener que lea las definiciones desde datapacks
-// sin tocar el resto.
+import net.minecraft.resources.ResourceLocation;
+import zumito.zumactions.ZumActionsDuoEmotes;
+
+// Poblado por EmoteReloadListener en cada (re)carga de datapacks. El resto del mod
+// (comandos, RequestManager, SessionManager) solo depende de get()/ids(), sin saber
+// que los datos vienen de JSON.
 public final class EmoteRegistry {
-	private static final Map<String, EmoteDefinition> EMOTES = new LinkedHashMap<>();
+	private static Map<String, EmoteDefinition> emotes = Map.of();
 
 	private EmoteRegistry() {
 	}
 
-	public static void bootstrap() {
-		register(EmoteDefinition.oneshot("wave", "saludo", EmoteParticipants.SOLO, 20));
-		register(EmoteDefinition.loop("sit", "sentarse", EmoteParticipants.SOLO));
-
-		register(EmoteDefinition.oneshot("kiss", "beso", EmoteParticipants.DUO, 30));
-		register(EmoteDefinition.oneshot("high_five", "chócala", EmoteParticipants.DUO, 20));
-		register(EmoteDefinition.oneshot("pat", "pat pat", EmoteParticipants.DUO, 20));
-		register(EmoteDefinition.loop("hug", "abrazo", EmoteParticipants.DUO));
-		register(EmoteDefinition.movement("hold_hand", "llevar de la mano", 6));
-		register(EmoteDefinition.movement("piggyback", "caballito", 6));
+	public static void reload(Map<ResourceLocation, EmoteDefinition> loaded) {
+		Map<String, EmoteDefinition> next = new LinkedHashMap<>();
+		for (Map.Entry<ResourceLocation, EmoteDefinition> entry : loaded.entrySet()) {
+			next.put(entry.getKey().toString(), entry.getValue());
+		}
+		emotes = next;
 	}
 
-	private static void register(EmoteDefinition emote) {
-		EMOTES.put(emote.id(), emote);
-	}
-
-	public static EmoteDefinition get(String id) {
-		return EMOTES.get(id.toLowerCase(Locale.ROOT));
+	public static EmoteDefinition get(String rawId) {
+		return emotes.get(normalize(rawId));
 	}
 
 	public static Collection<String> ids() {
-		return EMOTES.keySet();
+		return emotes.keySet();
+	}
+
+	// Un id sin namespace ("hug") se asume del namespace del mod ("zumactions:hug"),
+	// igual que hacen los comandos vanilla con items/bloques.
+	private static String normalize(String rawId) {
+		String lower = rawId.toLowerCase(Locale.ROOT);
+		return lower.contains(":") ? lower : ZumActionsDuoEmotes.MOD_ID + ":" + lower;
 	}
 }

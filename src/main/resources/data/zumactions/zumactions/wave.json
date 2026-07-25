@@ -1,0 +1,6 @@
+{
+  "label": "saludo",
+  "participants": "solo",
+  "behavior": "oneshot",
+  "duration_ticks": 20
+}

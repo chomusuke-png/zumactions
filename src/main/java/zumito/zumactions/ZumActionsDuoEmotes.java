@@ -1,14 +1,16 @@
 package zumito.zumactions;
 
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
 
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.packs.PackType;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import zumito.zumactions.command.ZumActionsCommand;
-import zumito.zumactions.emote.EmoteRegistry;
+import zumito.zumactions.emote.EmoteReloadListener;
 import zumito.zumactions.request.RequestManager;
 import zumito.zumactions.request.SessionManager;
 
@@ -23,7 +25,7 @@ public class ZumActionsDuoEmotes implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		LOGGER.info("ZumActions initialized");
-		EmoteRegistry.bootstrap();
+		ResourceManagerHelper.get(PackType.SERVER_DATA).registerReloadListener(new EmoteReloadListener());
 		RequestManager.registerEvents();
 		SessionManager.registerEvents();
 		ZumActionsCommand.register();

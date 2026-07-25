@@ -13,8 +13,11 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundSetPassengersPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.phys.Vec3;
 import zumito.zumactions.emote.EmoteBehavior;
 import zumito.zumactions.emote.EmoteDefinition;
+
+import java.util.stream.Collectors;
 
 // Estado autoritativo de los emotes en curso (ya aceptados, o ejecutados en solitario).
 // Separado de RequestManager, que solo maneja el ciclo de vida de la solicitud previa
@@ -31,9 +34,13 @@ import zumito.zumactions.emote.EmoteDefinition;
 // de otro jugador. Como acá sí lo es, hay que reenviarle el ClientboundSetPassengersPacket
 // a mano al líder cada vez que su lista de passengers cambia (ver syncLeaderPassengers).
 //
-// LOOP todavía no se corta por movimiento (queda para el próximo paso); por ahora solo
-// termina con /zumactions stop o desconexión.
+// LOOP se corta si alguno de los participantes se aleja de dónde estaba parado al empezar
+// (más que MOVE_THRESHOLD_SQ) o se agacha. La espera previa a aceptar (RequestManager) NO
+// usa esta lógica a propósito: caminar con los brazos abiertos hacia quien vas a abrazar,
+// mientras esperás que acepte, no debería cancelar nada.
 public final class SessionManager {
+	private static final double MOVE_THRESHOLD_SQ = 0.1 * 0.1;
+
 	private static final Map<UUID, ActiveSession> sessionsByParticipant = new HashMap<>();
 
 	private SessionManager() {
@@ -56,7 +63,10 @@ public final class SessionManager {
 
 		List<UUID> ids = participants.stream().map(ServerPlayer::getUUID).toList();
 		UUID leader = emote.behavior() == EmoteBehavior.MOVEMENT ? participants.get(0).getUUID() : null;
-		ActiveSession session = new ActiveSession(ids, emote.id(), emote.behavior(), leader, expiresAtTick);
+		Map<UUID, Vec3> anchors = emote.behavior() == EmoteBehavior.LOOP
+				? participants.stream().collect(Collectors.toMap(ServerPlayer::getUUID, ServerPlayer::position))
+				: Map.of();
+		ActiveSession session = new ActiveSession(ids, emote.id(), emote.behavior(), leader, anchors, expiresAtTick);
 		for (UUID id : ids) {
 			sessionsByParticipant.put(id, session);
 		}
@@ -99,8 +109,27 @@ public final class SessionManager {
 
 			if (session.behavior() == EmoteBehavior.MOVEMENT && !isStillMounted(session, server)) {
 				end(session, server, "La animación terminó.");
+				continue;
+			}
+
+			if (session.behavior() == EmoteBehavior.LOOP && didSomeoneMove(session, server)) {
+				end(session, server, "Se cortó porque alguien se movió.");
 			}
 		}
+	}
+
+	private static boolean didSomeoneMove(ActiveSession session, MinecraftServer server) {
+		for (UUID id : session.participants()) {
+			ServerPlayer player = server.getPlayerList().getPlayer(id);
+			Vec3 anchor = session.anchors().get(id);
+			if (player == null || anchor == null) {
+				continue;
+			}
+			if (player.isShiftKeyDown() || player.position().distanceToSqr(anchor) > MOVE_THRESHOLD_SQ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static boolean isStillMounted(ActiveSession session, MinecraftServer server) {

@@ -1,4 +1,5 @@
 {
   "key.zumactions.category": "ZumActions",
-  "key.zumactions.accept": "Aceptar solicitud (mirando al jugador)"
+  "key.zumactions.accept": "Aceptar solicitud (mirando al jugador)",
+  "key.zumactions.reject": "Rechazar solicitud (mirando al jugador)"
 }

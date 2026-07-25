@@ -23,10 +23,15 @@ import zumito.zumactions.network.PendingRequestsPayload;
 public class ZumActionsDuoEmotesClient implements ClientModInitializer {
 	private static final KeyMapping ACCEPT_KEY = new KeyMapping(
 			"key.zumactions.accept", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_G, "key.zumactions.category");
+	// Sin tecla por defecto: rechazar sigue funcionando por comando/tag, y quien quiera
+	// una tecla dedicada la asigna desde el menú de controles.
+	private static final KeyMapping REJECT_KEY = new KeyMapping(
+			"key.zumactions.reject", InputConstants.Type.KEYSYM, InputConstants.UNKNOWN.getValue(), "key.zumactions.category");
 
 	@Override
 	public void onInitializeClient() {
 		KeyBindingHelper.registerKeyBinding(ACCEPT_KEY);
+		KeyBindingHelper.registerKeyBinding(REJECT_KEY);
 
 		ClientPlayNetworking.registerGlobalReceiver(PendingRequestsPayload.TYPE, (payload, context) -> {
 			List<PendingRequestsPayload.Entry> added = ClientPendingRequests.update(payload.requests());
@@ -39,18 +44,21 @@ public class ZumActionsDuoEmotesClient implements ClientModInitializer {
 		});
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> ClientPendingRequests.clear());
 
-		ClientTickEvents.END_CLIENT_TICK.register(ZumActionsDuoEmotesClient::handleAcceptKey);
+		ClientTickEvents.END_CLIENT_TICK.register(ZumActionsDuoEmotesClient::handleKeys);
 	}
 
-	private static void handleAcceptKey(Minecraft client) {
+	private static void handleKeys(Minecraft client) {
 		while (ACCEPT_KEY.consumeClick()) {
-			tryAcceptLookedAtPlayer(client);
+			respondToLookedAtSender(client, "accept");
+		}
+		while (REJECT_KEY.consumeClick()) {
+			respondToLookedAtSender(client, "reject");
 		}
 	}
 
 	// Solo funciona mientras el crosshair esté sobre un jugador que te mandó una
 	// solicitud (a propósito, como pidió el diseño original: "mirando a ese jugador").
-	private static void tryAcceptLookedAtPlayer(Minecraft client) {
+	private static void respondToLookedAtSender(Minecraft client, String action) {
 		LocalPlayer player = client.player;
 		HitResult hitResult = client.hitResult;
 		if (player == null || !(hitResult instanceof EntityHitResult entityHitResult)) {
@@ -66,6 +74,6 @@ public class ZumActionsDuoEmotesClient implements ClientModInitializer {
 			return;
 		}
 
-		player.connection.sendCommand("zumactions accept " + targetPlayer.getGameProfile().getName());
+		player.connection.sendCommand("zumactions " + action + " " + targetPlayer.getGameProfile().getName());
 	}
 }

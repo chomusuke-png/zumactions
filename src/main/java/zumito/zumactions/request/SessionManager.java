@@ -12,8 +12,11 @@ import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundSetPassengersPacket;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.ServerScoreboard;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.scores.PlayerTeam;
+import net.minecraft.world.scores.Team;
 import zumito.zumactions.emote.EmoteBehavior;
 import zumito.zumactions.emote.EmoteDefinition;
 
@@ -40,6 +43,7 @@ import java.util.stream.Collectors;
 // mientras esperás que acepte, no debería cancelar nada.
 public final class SessionManager {
 	private static final double MOVE_THRESHOLD_SQ = 0.1 * 0.1;
+	private static final String NO_COLLISION_TEAM_NAME = "zumactions_no_collision";
 
 	private static final Map<UUID, ActiveSession> sessionsByParticipant = new HashMap<>();
 
@@ -61,12 +65,27 @@ public final class SessionManager {
 				? server.getTickCount() + emote.durationTicks()
 				: ActiveSession.NO_EXPIRY;
 
+		boolean facesEachOther = (emote.behavior() == EmoteBehavior.ONESHOT || emote.behavior() == EmoteBehavior.LOOP) && participants.size() > 1;
+
+		// ONESHOT/LOOP no usan passengers, así que sin esto quedarían "al aire" a la
+		// distancia máxima permitida para aceptar (5 bloques). Se hace ANTES de tomar los
+		// anchors de LOOP para que el teleport no cuente como "se movió" al toque.
+		if (facesEachOther) {
+			positionFaceToFace(participants.get(0), participants.get(1), emote.distance());
+		}
+
+		// Distancias tan cortas hacen que las hitboxes se solapen y Minecraft los empuje
+		// para separarlos (lo que además corta el LOOP, porque cuenta como "se movió") y
+		// deja que cualquiera de afuera los empuje también. Se sacan de la física de
+		// colisión mientras dura la sesión.
+		Map<UUID, String> previousTeams = facesEachOther ? disableCollision(server, participants) : Map.of();
+
 		List<UUID> ids = participants.stream().map(ServerPlayer::getUUID).toList();
 		UUID leader = emote.behavior() == EmoteBehavior.MOVEMENT ? participants.get(0).getUUID() : null;
 		Map<UUID, Vec3> anchors = emote.behavior() == EmoteBehavior.LOOP
 				? participants.stream().collect(Collectors.toMap(ServerPlayer::getUUID, ServerPlayer::position))
 				: Map.of();
-		ActiveSession session = new ActiveSession(ids, emote.id(), emote.behavior(), leader, anchors, expiresAtTick);
+		ActiveSession session = new ActiveSession(ids, emote.id(), emote.behavior(), leader, anchors, previousTeams, expiresAtTick);
 		for (UUID id : ids) {
 			sessionsByParticipant.put(id, session);
 		}
@@ -158,6 +177,8 @@ public final class SessionManager {
 			sessionsByParticipant.remove(id);
 		}
 
+		restoreCollision(server, session);
+
 		if (session.behavior() == EmoteBehavior.MOVEMENT) {
 			ServerPlayer passenger = passengerOf(session, server);
 			if (passenger != null && passenger.isPassenger()) {
@@ -186,5 +207,59 @@ public final class SessionManager {
 	// su propia entidad a través del sistema normal de tracking, hay que mandárselo directo.
 	private static void syncLeaderPassengers(ServerPlayer leader) {
 		leader.connection.send(new ClientboundSetPassengersPacket(leader));
+	}
+
+	// Teletransporta al que acepta justo enfrente de quien pidió el emote (a "distance"
+	// bloques, en la dirección a la que está mirando el emisor) y lo orienta para que
+	// quede cara a cara. El emisor no se mueve ni se reorienta.
+	private static void positionFaceToFace(ServerPlayer sender, ServerPlayer acceptor, double distance) {
+		float yawRad = (float) Math.toRadians(sender.getYRot());
+		double x = sender.getX() - Math.sin(yawRad) * distance;
+		double z = sender.getZ() + Math.cos(yawRad) * distance;
+		float facingYaw = sender.getYRot() + 180F;
+		acceptor.teleportTo(sender.serverLevel(), x, sender.getY(), z, facingYaw, acceptor.getXRot());
+	}
+
+	// Mete a los participantes en un equipo compartido con collisionRule NEVER, para que
+	// no se empujen entre ellos ni los empuje nadie de afuera. Devuelve, por jugador, el
+	// nombre del equipo que tenían antes (o null si no tenían), para poder restaurarlo.
+	private static Map<UUID, String> disableCollision(MinecraftServer server, List<ServerPlayer> participants) {
+		ServerScoreboard scoreboard = server.getScoreboard();
+		PlayerTeam team = scoreboard.getPlayerTeam(NO_COLLISION_TEAM_NAME);
+		if (team == null) {
+			team = scoreboard.addPlayerTeam(NO_COLLISION_TEAM_NAME);
+			team.setCollisionRule(Team.CollisionRule.NEVER);
+		}
+
+		Map<UUID, String> previousTeams = new HashMap<>();
+		for (ServerPlayer player : participants) {
+			PlayerTeam previous = scoreboard.getPlayersTeam(player.getScoreboardName());
+			previousTeams.put(player.getUUID(), previous != null ? previous.getName() : null);
+			scoreboard.addPlayerToTeam(player.getScoreboardName(), team);
+		}
+		return previousTeams;
+	}
+
+	private static void restoreCollision(MinecraftServer server, ActiveSession session) {
+		if (session.previousTeams().isEmpty()) {
+			return;
+		}
+
+		ServerScoreboard scoreboard = server.getScoreboard();
+		for (Map.Entry<UUID, String> entry : session.previousTeams().entrySet()) {
+			ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
+			if (player == null) {
+				continue;
+			}
+
+			scoreboard.removePlayerFromTeam(player.getScoreboardName());
+			String previousTeamName = entry.getValue();
+			if (previousTeamName != null) {
+				PlayerTeam previousTeam = scoreboard.getPlayerTeam(previousTeamName);
+				if (previousTeam != null) {
+					scoreboard.addPlayerToTeam(player.getScoreboardName(), previousTeam);
+				}
+			}
+		}
 	}
 }

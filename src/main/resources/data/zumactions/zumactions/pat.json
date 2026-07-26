@@ -2,5 +2,6 @@
   "label": "pat pat",
   "participants": "duo",
   "behavior": "oneshot",
-  "duration_ticks": 20
+  "duration_ticks": 20,
+  "distance": 0.8
 }

@@ -12,12 +12,18 @@ import zumito.zumactions.emote.EmoteBehavior;
 //
 // anchors solo se puebla para sesiones LOOP: la posición de cada participante al empezar,
 // usada para detectar que alguien se movió y cortar la animación.
+//
+// previousTeams solo se puebla para ONESHOT/LOOP en dúo: a esos participantes se los mete
+// en un equipo temporal sin colisión (para que no se empujen entre ellos ni los empuje
+// nadie de afuera mientras dura la animación). El valor es el nombre de su equipo anterior
+// (o null si no tenían), para restaurarlo al terminar.
 record ActiveSession(
 		List<UUID> participants,
 		String emoteId,
 		EmoteBehavior behavior,
 		UUID leader,
 		Map<UUID, Vec3> anchors,
+		Map<UUID, String> previousTeams,
 		long expiresAtTick) {
 	static final long NO_EXPIRY = -1;
 

@@ -25,6 +25,7 @@ import zumito.zumactions.ZumActionsDuoEmotes;
 //   behavior: "oneshot" | "loop" | "movement" (siempre)
 //   duration_ticks (int, solo relevante en oneshot, default 0)
 //   max_chain_length (int, solo relevante en movement, default 2)
+//   distance (double, solo relevante en oneshot/loop con participants=duo, default 1.0)
 public class EmoteReloadListener extends SimpleJsonResourceReloadListener implements IdentifiableResourceReloadListener {
 	private static final Logger LOGGER = LoggerFactory.getLogger(ZumActionsDuoEmotes.MOD_ID + "/emotes");
 	private static final ResourceLocation ID = ResourceLocation.fromNamespaceAndPath(ZumActionsDuoEmotes.MOD_ID, "emotes");
@@ -58,8 +59,9 @@ public class EmoteReloadListener extends SimpleJsonResourceReloadListener implem
 
 		int durationTicks = GsonHelper.getAsInt(json, "duration_ticks", 0);
 		int maxChainLength = GsonHelper.getAsInt(json, "max_chain_length", 2);
+		double distance = GsonHelper.getAsDouble(json, "distance", 1.0);
 
-		return new EmoteDefinition(id.toString(), label, participants, behavior, durationTicks, maxChainLength);
+		return new EmoteDefinition(id.toString(), label, participants, behavior, durationTicks, maxChainLength, distance);
 	}
 
 	private static <T extends Enum<T>> T parseEnum(T[] values, String raw, String field) {

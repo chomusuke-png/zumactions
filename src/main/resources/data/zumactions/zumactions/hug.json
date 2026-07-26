@@ -1,5 +1,6 @@
 {
   "label": "abrazo",
   "participants": "duo",
-  "behavior": "loop"
+  "behavior": "loop",
+  "distance": 0.5
 }

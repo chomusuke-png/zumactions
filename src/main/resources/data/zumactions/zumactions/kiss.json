@@ -2,5 +2,6 @@
   "label": "beso",
   "participants": "duo",
   "behavior": "oneshot",
-  "duration_ticks": 30
+  "duration_ticks": 30,
+  "distance": 0.4
 }

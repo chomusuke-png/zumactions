@@ -93,6 +93,10 @@ public final class SessionManager {
 		if (emote.behavior() == EmoteBehavior.MOVEMENT) {
 			ServerPlayer leaderPlayer = participants.get(0);
 			ServerPlayer passenger = participants.get(1);
+			// teleportTo hace stopRiding() internamente, por eso va antes de montar: si lo
+			// llamáramos después, se bajaría al pasajero apenas lo acabábamos de subir.
+			passenger.teleportTo(leaderPlayer.serverLevel(), passenger.getX(), passenger.getY(), passenger.getZ(),
+					leaderPlayer.getYRot(), leaderPlayer.getXRot());
 			passenger.startRiding(leaderPlayer, true);
 			syncLeaderPassengers(leaderPlayer);
 		}
@@ -126,9 +130,12 @@ public final class SessionManager {
 				continue;
 			}
 
-			if (session.behavior() == EmoteBehavior.MOVEMENT && !isStillMounted(session, server)) {
-				end(session, server, null);
-				continue;
+			if (session.behavior() == EmoteBehavior.MOVEMENT) {
+				if (!isStillMounted(session, server)) {
+					end(session, server, null);
+					continue;
+				}
+				syncPassengerLook(session, server);
 			}
 
 			if (session.behavior() == EmoteBehavior.LOOP && didSomeoneMove(session, server)) {
@@ -155,6 +162,18 @@ public final class SessionManager {
 		ServerPlayer leader = server.getPlayerList().getPlayer(session.leader());
 		ServerPlayer passenger = passengerOf(session, server);
 		return leader != null && passenger != null && passenger.isPassenger() && passenger.getVehicle() == leader;
+	}
+
+	// Fuerza la cámara del pasajero a mirar hacia donde mira el líder, cada tick, mientras
+	// dure la montura. Usa el connection.teleport "liviano" (no el ServerPlayer#teleportTo)
+	// porque ese último hace stopRiding() y desmontaría al pasajero en cada tick.
+	private static void syncPassengerLook(ActiveSession session, MinecraftServer server) {
+		ServerPlayer leader = server.getPlayerList().getPlayer(session.leader());
+		ServerPlayer passenger = passengerOf(session, server);
+		if (leader == null || passenger == null) {
+			return;
+		}
+		passenger.connection.teleport(passenger.getX(), passenger.getY(), passenger.getZ(), leader.getYRot(), leader.getXRot());
 	}
 
 	private static ServerPlayer passengerOf(ActiveSession session, MinecraftServer server) {

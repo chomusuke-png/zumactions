@@ -13,6 +13,8 @@ import org.slf4j.LoggerFactory;
 import zumito.zumactions.command.ZumActionsCommand;
 import zumito.zumactions.emote.EmoteReloadListener;
 import zumito.zumactions.network.PendingRequestsPayload;
+import zumito.zumactions.network.PlayAnimationPayload;
+import zumito.zumactions.network.StopAnimationPayload;
 import zumito.zumactions.request.RequestManager;
 import zumito.zumactions.request.SessionManager;
 
@@ -28,6 +30,8 @@ public class ZumActionsDuoEmotes implements ModInitializer {
 	public void onInitialize() {
 		LOGGER.info("ZumActions initialized");
 		PayloadTypeRegistry.playS2C().register(PendingRequestsPayload.TYPE, PendingRequestsPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(PlayAnimationPayload.TYPE, PlayAnimationPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(StopAnimationPayload.TYPE, StopAnimationPayload.STREAM_CODEC);
 		ResourceManagerHelper.get(PackType.SERVER_DATA).registerReloadListener(new EmoteReloadListener());
 		RequestManager.registerEvents();
 		SessionManager.registerEvents();

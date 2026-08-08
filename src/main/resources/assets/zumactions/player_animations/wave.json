@@ -1,0 +1,21 @@
+{
+  "format_version": "1.8.0",
+  "animations": {
+    "wave": {
+      "animation_length": 1.0,
+      "loop": false,
+      "bones": {
+        "rightArm": {
+          "rotation": {
+            "0.0": { "vector": [0, 0, 0] },
+            "0.2": { "vector": [-20, 0, 110] },
+            "0.4": { "vector": [-5, 0, 120] },
+            "0.6": { "vector": [-20, 0, 100] },
+            "0.8": { "vector": [-5, 0, 120] },
+            "1.0": { "vector": [0, 0, 0] }
+          }
+        }
+      }
+    }
+  }
+}

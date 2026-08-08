@@ -19,6 +19,8 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import zumito.zumactions.network.PendingRequestsPayload;
+import zumito.zumactions.network.PlayAnimationPayload;
+import zumito.zumactions.network.StopAnimationPayload;
 
 public class ZumActionsDuoEmotesClient implements ClientModInitializer {
 	private static final KeyMapping ACCEPT_KEY = new KeyMapping(
@@ -40,7 +42,15 @@ public class ZumActionsDuoEmotesClient implements ClientModInitializer {
 				context.player().displayClientMessage(message, false);
 			}
 		});
-		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> ClientPendingRequests.clear());
+		ClientPlayNetworking.registerGlobalReceiver(PlayAnimationPayload.TYPE,
+				(payload, context) -> ClientAnimationTracker.play(payload.playerId(), payload.animationId()));
+		ClientPlayNetworking.registerGlobalReceiver(StopAnimationPayload.TYPE,
+				(payload, context) -> ClientAnimationTracker.stop(payload.playerId()));
+
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+			ClientPendingRequests.clear();
+			ClientAnimationTracker.clear();
+		});
 
 		ClientTickEvents.END_CLIENT_TICK.register(ZumActionsDuoEmotesClient::handleKeys);
 	}

@@ -9,6 +9,7 @@ import java.util.UUID;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundSetPassengersPacket;
 import net.minecraft.server.MinecraftServer;
@@ -19,6 +20,8 @@ import net.minecraft.world.scores.PlayerTeam;
 import net.minecraft.world.scores.Team;
 import zumito.zumactions.emote.EmoteBehavior;
 import zumito.zumactions.emote.EmoteDefinition;
+import zumito.zumactions.network.PlayAnimationPayload;
+import zumito.zumactions.network.StopAnimationPayload;
 
 import java.util.stream.Collectors;
 
@@ -107,6 +110,11 @@ public final class SessionManager {
 		for (ServerPlayer player : participants) {
 			player.sendSystemMessage(message);
 		}
+
+		// El registro de animaciones de Player Animator vive del lado del cliente, así que
+		// esto es solo un aviso: si el cliente no tiene un player_animations/<emote.id()>
+		// cargado, no pasa nada, sigue viéndose el mensaje de texto nomás.
+		broadcastAnimation(server, ids, emote.id());
 	}
 
 	public static void stop(ServerPlayer player) {
@@ -130,12 +138,9 @@ public final class SessionManager {
 				continue;
 			}
 
-			if (session.behavior() == EmoteBehavior.MOVEMENT) {
-				if (!isStillMounted(session, server)) {
-					end(session, server, null);
-					continue;
-				}
-				syncPassengerLook(session, server);
+			if (session.behavior() == EmoteBehavior.MOVEMENT && !isStillMounted(session, server)) {
+				end(session, server, null);
+				continue;
 			}
 
 			if (session.behavior() == EmoteBehavior.LOOP && didSomeoneMove(session, server)) {
@@ -164,18 +169,6 @@ public final class SessionManager {
 		return leader != null && passenger != null && passenger.isPassenger() && passenger.getVehicle() == leader;
 	}
 
-	// Fuerza la cámara del pasajero a mirar hacia donde mira el líder, cada tick, mientras
-	// dure la montura. Usa el connection.teleport "liviano" (no el ServerPlayer#teleportTo)
-	// porque ese último hace stopRiding() y desmontaría al pasajero en cada tick.
-	private static void syncPassengerLook(ActiveSession session, MinecraftServer server) {
-		ServerPlayer leader = server.getPlayerList().getPlayer(session.leader());
-		ServerPlayer passenger = passengerOf(session, server);
-		if (leader == null || passenger == null) {
-			return;
-		}
-		passenger.connection.teleport(passenger.getX(), passenger.getY(), passenger.getZ(), leader.getYRot(), leader.getXRot());
-	}
-
 	private static ServerPlayer passengerOf(ActiveSession session, MinecraftServer server) {
 		return session.participants().stream()
 				.filter(id -> !id.equals(session.leader()))
@@ -197,6 +190,7 @@ public final class SessionManager {
 		}
 
 		restoreCollision(server, session);
+		broadcastStopAnimation(server, session.participants());
 
 		if (session.behavior() == EmoteBehavior.MOVEMENT) {
 			ServerPlayer passenger = passengerOf(session, server);
@@ -226,6 +220,27 @@ public final class SessionManager {
 	// su propia entidad a través del sistema normal de tracking, hay que mandárselo directo.
 	private static void syncLeaderPassengers(ServerPlayer leader) {
 		leader.connection.send(new ClientboundSetPassengersPacket(leader));
+	}
+
+	// Se manda a TODOS los jugadores conectados (no solo a los participantes) porque
+	// cualquiera puede estar mirándolos — es una cuestión de renderizado, cada cliente
+	// decide si tiene la animación cargada o no.
+	private static void broadcastAnimation(MinecraftServer server, List<UUID> participantIds, String animationId) {
+		for (UUID id : participantIds) {
+			PlayAnimationPayload payload = new PlayAnimationPayload(id, animationId);
+			for (ServerPlayer observer : server.getPlayerList().getPlayers()) {
+				ServerPlayNetworking.send(observer, payload);
+			}
+		}
+	}
+
+	private static void broadcastStopAnimation(MinecraftServer server, List<UUID> participantIds) {
+		for (UUID id : participantIds) {
+			StopAnimationPayload payload = new StopAnimationPayload(id);
+			for (ServerPlayer observer : server.getPlayerList().getPlayers()) {
+				ServerPlayNetworking.send(observer, payload);
+			}
+		}
 	}
 
 	// Teletransporta al que acepta justo enfrente de quien pidió el emote (a "distance"

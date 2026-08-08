@@ -12,6 +12,10 @@ repositories {
 	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
 	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
 	// for more information about repositories.
+	maven {
+		name "KosmX's maven"
+		url 'https://maven.kosmx.dev/'
+	}
 }
 
 loom {
@@ -33,6 +37,11 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// Player Animator: reproduce las animaciones de Blockbench (.paj) sobre el modelo
+	// del jugador. "include" la empaqueta dentro de nuestro jar para que quien instale
+	// zumactions no tenga que bajarla aparte.
+	include modImplementation("dev.kosmx.player-anim:player-animation-lib-fabric:${project.player_anim_version}")
 }
 
 processResources {
